@@ -1,4 +1,4 @@
-﻿[GENERAL]
+[GENERAL]
 Name=base
 Description=Profilo essenziale per PC neutri
 
@@ -12,3 +12,8 @@ Choco=7zip,googlechrome,vlc
 [SYSTEM]
 DisableSleep=true
 SetChromeDefault=false
+
+[UPDATES]
+AutoReboot=false
+SkipKB=
+IncludeDrivers=false
