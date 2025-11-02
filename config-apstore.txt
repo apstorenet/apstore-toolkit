@@ -1,4 +1,4 @@
-﻿[GENERAL]
+[GENERAL]
 Name=apstore
 Description=Profilo aziendale con impostazioni personalizzate
 
@@ -12,3 +12,8 @@ Choco=7zip,googlechrome,firefox,notepadplusplus,git,vscode,vlc
 [SYSTEM]
 DisableSleep=true
 SetChromeDefault=true
+
+[UPDATES]
+AutoReboot=true
+SkipKB=KB5034441,KB5030211
+IncludeDrivers=true
