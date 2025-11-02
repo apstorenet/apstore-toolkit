@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-title apStore Toolkit v1.8.1 - Automazione Windows Completa
+title apStore Toolkit v1.8.2 - Automazione Windows Completa
 
 :: ==== Auto-elevazione UAC ====
 net session >nul 2>&1
@@ -23,14 +23,14 @@ if not exist "%PSFILE%" (
   pause & exit /b 1
 )
 
-:: Avvia PowerShell (bypass policy). No -NoExit per evitare tabelle corrotte se si chiude con CTRL+C
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%"
+:: Avvia PowerShell nella CARTELLA del .bat (cosi' vede i config locali)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Location '%~dp0'; & '%PSFILE%'"
 exit /b
 
 
 :#PS1
 <# =====================================================================
-  apStore Toolkit v1.8.1 (hotfix)
+  apStore Toolkit v1.8.2
   Autore: Antonio Piccolo - apstore.net
   Ultimo aggiornamento: 02/11/2025
   --------------------------------------------------------------------
@@ -38,9 +38,9 @@ exit /b
    [1] Gestione Utenti
    [2] Installazione Programmi (Chocolatey)
    [3] Personalizzazione (homepage + wallpaper)
-   [4] Aggiornamenti (Driver / OS / App / Tutto)
+   [4] Aggiornamenti (Driver / OS / App / Tutto + Toggle Reboot)
    [6] Sistema (Chrome predef., disabilita sospensione)
-   [5] Esegui TUTTO
+   [5] Esegui TUTTO (rispetta Toggle Reboot)
    [9] Cambia profilo config
    [0] Esci
 ===================================================================== #>
@@ -49,10 +49,11 @@ param([switch]$Hold)
 $ErrorActionPreference = 'Stop'
 
 # === Globali ===
-$Global:ToolkitVersion = 'v1.8.1'
+$Global:ToolkitVersion = 'v1.8.2'
 $Global:ConfigDir      = Split-Path -Parent $PSCommandPath
 $Global:LastConfigFile = Join-Path $Global:ConfigDir '.lastconfig'
 $Global:ProfilesRoot   = Join-Path $Global:ConfigDir 'profiles'
+$Global:AutoReboot     = $false   # <- Toggle riavvio automatico
 New-Item $Global:ProfilesRoot -ItemType Directory -Force | Out-Null
 
 # === Utils ===
@@ -63,30 +64,9 @@ function Ensure-Folder($p){ if(-not(Test-Path $p)){ New-Item -ItemType Directory
 
 # === Config files ===
 function List-ConfigFiles(){ Get-ChildItem -Path $Global:ConfigDir -Filter 'config*.txt' -File -ErrorAction SilentlyContinue }
-function Get-ActiveConfigName(){
-  if($Global:SelectedConfigPath -and (Test-Path $Global:SelectedConfigPath)){
-    return (Split-Path $Global:SelectedConfigPath -Leaf)
-  }
-  return "(nessun profilo)"
-}
-function Save-LastConfig(){
-  try{
-    if($Global:SelectedConfigPath){
-      Set-Content -Path $Global:LastConfigFile -Value $Global:SelectedConfigPath -Encoding UTF8
-    }
-  }catch{}
-}
-function Load-LastConfig(){
-  try{
-    if(Test-Path $Global:LastConfigFile){
-      $p = Get-Content -Raw $Global:LastConfigFile
-      if(Test-Path $p){
-        $Global:SelectedConfigPath = $p
-        Write-Info ("Ultimo profilo: {0}" -f (Split-Path $p -Leaf))
-      }
-    }
-  }catch{}
-}
+function Get-ActiveConfigName(){ if($Global:SelectedConfigPath -and (Test-Path $Global:SelectedConfigPath)){ return (Split-Path $Global:SelectedConfigPath -Leaf) } return "(nessun profilo)" }
+function Save-LastConfig(){ try{ if($Global:SelectedConfigPath){ Set-Content -Path $Global:LastConfigFile -Value $Global:SelectedConfigPath -Encoding UTF8 } }catch{} }
+function Load-LastConfig(){ try{ if(Test-Path $Global:LastConfigFile){ $p = Get-Content -Raw $Global:LastConfigFile; if(Test-Path $p){ $Global:SelectedConfigPath = $p; Write-Info ("Ultimo profilo: {0}" -f (Split-Path $p -Leaf)) } } }catch{} }
 function Select-ConfigFile(){
   $list = List-ConfigFiles
   if(-not $list){ Write-Warn ("Nessun file config trovato in {0}" -f $Global:ConfigDir); return }
@@ -113,16 +93,12 @@ function Show-Header(){
   Write-Host "Autore: Antonio Piccolo - apstore.net" -ForegroundColor DarkCyan
   Write-Host "Ultimo aggiornamento: 02/11/2025" -ForegroundColor DarkGray
   Write-Host ("Config attiva: {0}" -f (Get-ActiveConfigName)) -ForegroundColor Green
+  Write-Host ("Riavvio automatico: {0}" -f ($(if($Global:AutoReboot){"ON"}else{"OFF"}))) -ForegroundColor Yellow
   Write-Host "-----------------------------------------------------------------"
 }
 
-# === Gestione Utenti ===
-function Get-AdminsHash(){
-  $h=@{}; try{ (Get-LocalGroupMember -Group 'Administrators') | ForEach-Object{
-    $n = $_.Name -replace '^[^\\]+\\',''
-    $h[$n] = $true
-  } }catch{}; return $h
-}
+# === Gestione Utenti (ridotta ma funzionale) ===
+function Get-AdminsHash(){ $h=@{}; try{ (Get-LocalGroupMember -Group 'Administrators') | ForEach-Object{ $n=$_.Name -replace '^[^\\]+\\',''; $h[$n]=$true } }catch{}; return $h }
 function Show-LocalUsers(){
   try{
     $admins = Get-AdminsHash
@@ -138,9 +114,7 @@ function Show-LocalUsers(){
 }
 function Ensure-LocalUserFull([string]$Old,[string]$New,[string]$Password,[bool]$Admins,[bool]$NeverExp){
   if([string]::IsNullOrWhiteSpace($Password)){ throw "Password non specificata." }
-  if($Old -and $New -and $Old -ne $New){
-    try{ Rename-LocalUser -Name $Old -NewName $New }catch{}
-  }
+  if($Old -and $New -and $Old -ne $New){ try{ Rename-LocalUser -Name $Old -NewName $New }catch{} }
   $name = if($New){$New}else{$Old}
   $sec  = ConvertTo-SecureString $Password -AsPlainText -Force
   $u    = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
@@ -163,20 +137,9 @@ function Utenti-Loop(){
     $c = Menu-Utenti
     switch($c.ToUpper()){
       'L' { Show-LocalUsers }
-      '1' {
-        $n = Read-Host "Nome utente"
-        $p = Read-Host "Password"
-        Ensure-LocalUserFull -Old $n -New $n -Password $p -Admins:$true -NeverExp:$true
-      }
-      '2' {
-        $n = Read-Host "Nome"
-        $p = Read-Host "Nuova password"
-        Ensure-LocalUserFull -Old $n -New $n -Password $p -Admins:$false -NeverExp:$true
-      }
-      '3' {
-        $n = Read-Host "Nome"
-        try{ Add-LocalGroupMember -Group "Administrators" -Member $n -ErrorAction Stop; Write-Info "Aggiunto." }catch{ Write-Warn $_.Exception.Message }
-      }
+      '1' { $n=Read-Host "Nome utente"; $p=Read-Host "Password"; Ensure-LocalUserFull -Old $n -New $n -Password $p -Admins:$true -NeverExp:$true }
+      '2' { $n=Read-Host "Nome"; $p=Read-Host "Nuova password"; Ensure-LocalUserFull -Old $n -New $n -Password $p -Admins:$false -NeverExp:$true }
+      '3' { $n=Read-Host "Nome"; try{ Add-LocalGroupMember -Group "Administrators" -Member $n -ErrorAction Stop; Write-Info "Aggiunto." }catch{ Write-Warn $_.Exception.Message } }
       'B' { break UT }
       default { Write-Host "Scelta non valida." }
     }
@@ -223,50 +186,44 @@ function App-Loop(){
     $c = Menu-App
     switch($c.ToUpper()){
       '1' { Install-ChocoPackages -Pkgs $Global:PresetPackages }
-      '2' {
-        $inp = Read-Host "Inserisci pacchetti separati da virgola (es: anydesk,putty,winrar)"
-        if([string]::IsNullOrWhiteSpace($inp)){ Write-Warn "Nessun pacchetto inserito."; break }
-        $pk = ($inp -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        Install-ChocoPackages -Pkgs $pk
-      }
+      '2' { $inp = Read-Host "Inserisci pacchetti separati da virgola (es: anydesk,putty,winrar)"; if([string]::IsNullOrWhiteSpace($inp)){ Write-Warn "Nessun pacchetto inserito."; break }; $pk = ($inp -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }); Install-ChocoPackages -Pkgs $pk }
       'B' { break APP }
       default { Write-Host "Scelta non valida." }
     }
   }
 }
 
-# === Personalizzazione (Home + Wallpaper) ===
-function Apply-Homepages($Profile){
-  $urls = $Profile.HomeUrls
-  $single = if([string]::IsNullOrWhiteSpace($Profile.HomeSingle)){ $urls[0] } else { $Profile.HomeSingle }
-  if(-not $urls -or $urls.Count -eq 0){ throw "Nessuna URL nel profilo." }
+# === Personalizzazione (lettura rapida da config attivo) ===
+function Apply-Homepages-FromConfig(){
+  if(-not ($Global:SelectedConfigPath -and (Test-Path $Global:SelectedConfigPath))){ return }
+  $cfg = Get-Content -Raw $Global:SelectedConfigPath
+  $m = [regex]::Match($cfg,'(?ms)^\[HOMEPAGE\](.+?)(^\[|$)')
+  if(-not $m.Success){ return }
+  $block=$m.Groups[1].Value
+  $u=[regex]::Match($block,'(?m)^\s*Urls\s*=\s*(.+)$')
+  $h=[regex]::Match($block,'(?m)^\s*Home\s*=\s*(.+)$')
+  $urls=@(); if($u.Success){ $urls = ($u.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() }) }
+  $home=$(if($h.Success){ $h.Groups[1].Value.Trim() }elseif($urls){ $urls[0] }else{ $null })
+  if(-not $urls){ return }
+
   $chrome = "HKCU:\Software\Policies\Google\Chrome"; Ensure-Folder $chrome
   New-ItemProperty -Path $chrome -Name HomepageIsNewTabPage -Value 0 -PropertyType DWord -Force | Out-Null
   New-ItemProperty -Path $chrome -Name RestoreOnStartup   -Value 4 -PropertyType DWord -Force | Out-Null
   New-ItemProperty -Path $chrome -Name RestoreOnStartupURLs -Value $urls -PropertyType MultiString -Force | Out-Null
-  if($single){ New-ItemProperty -Path $chrome -Name HomepageLocation -Value $single -PropertyType String -Force | Out-Null }
+  if($home){ New-ItemProperty -Path $chrome -Name HomepageLocation -Value $home -PropertyType String -Force | Out-Null }
+
   $edge = "HKCU:\Software\Policies\Microsoft\Edge"; Ensure-Folder $edge
   New-ItemProperty -Path $edge -Name HomepageIsNewTabPage -Value 0 -PropertyType DWord -Force | Out-Null
   New-ItemProperty -Path $edge -Name RestoreOnStartup   -Value 4 -PropertyType DWord -Force | Out-Null
   New-ItemProperty -Path $edge -Name RestoreOnStartupURLs -Value $urls -PropertyType MultiString -Force | Out-Null
-  if($single){ New-ItemProperty -Path $edge -Name HomepageLocation -Value $single -PropertyType String -Force | Out-Null }
+  if($home){ New-ItemProperty -Path $edge -Name HomepageLocation -Value $home -PropertyType String -Force | Out-Null }
+
   $ffBase = "HKCU:\Software\Policies\Mozilla\Firefox"; Ensure-Folder $ffBase
   $ffHome = Join-Path $ffBase "Homepage"; Ensure-Folder $ffHome
   New-ItemProperty -Path $ffHome -Name StartPage -Value "homepage" -PropertyType String -Force | Out-Null
-  if($single){ New-ItemProperty -Path $ffHome -Name URL -Value $single -PropertyType String -Force | Out-Null }
-  Write-Info "Homepage impostate per l'utente corrente (riavvia i browser)."
-}
-function Apply-WallpaperByPath([string]$Path,[int]$Style=10){
-  if([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)){ throw "Immagine non trovata: $Path" }
-  $destRoot = 'C:\Windows\Web\apStore'; Ensure-Folder $destRoot
-  $destFile = Join-Path $destRoot ("apStore_wallpaper.jpg")
-  Copy-Item -Path $Path -Destination $destFile -Force
-  $regCP = "HKCU:\Control Panel\Desktop"
-  Set-ItemProperty -Path $regCP -Name Wallpaper      -Value $destFile
-  Set-ItemProperty -Path $regCP -Name WallpaperStyle -Value ([string]$Style)
-  Set-ItemProperty -Path $regCP -Name TileWallpaper  -Value "0"
-  rundll32.exe user32.dll,UpdatePerUserSystemParameters
-  Write-Info ("Wallpaper applicato: {0}" -f $destFile)
+  if($home){ New-ItemProperty -Path $ffHome -Name URL -Value $home -PropertyType String -Force | Out-Null }
+
+  Write-Info "Homepage applicate dal profilo."
 }
 
 # === Aggiornamenti ===
@@ -325,7 +282,7 @@ function WU-ScanInstall([switch]$OnlyScan,[switch]$WithDrivers,[string[]]$SkipKB
     $res=$inst.Install()
     if($res.RebootRequired){
       Write-Warn "Riavvio richiesto."
-      if($AutoReboot){ Restart-Computer -Force }
+      if($AutoReboot){ Write-Info "Riavvio automatico attivo: riavvio tra 10 secondi..."; Start-Sleep -Seconds 10; Restart-Computer -Force }
     } else {
       Write-Info "Installazione completata senza riavvio."
     }
@@ -338,6 +295,7 @@ function Menu-Updates(){
   Write-Host "[2] OS (solo aggiornamenti di sistema, niente driver)"
   Write-Host "[3] App (Store + Winget + Chocolatey)"
   Write-Host "[4] TUTTO (App + OS + Driver)"
+  Write-Host ("[5] Toggle Riavvio automatico (attuale: {0})" -f ($(if($Global:AutoReboot){"ON"}else{"OFF"})))
   Write-Host "[B] Indietro"
   Write-Host "-----------------------------------------------------------"
   return (Read-Host "Seleziona")
@@ -346,10 +304,11 @@ function Updates-Loop(){
   :UPD while($true){
     $s = Menu-Updates
     switch($s.ToUpper()){
-      '1' { WU-ScanInstall -OnlyDrivers -AutoReboot:$false }
-      '2' { WU-ScanInstall -WithDrivers:$false -AutoReboot:$false }
+      '1' { WU-ScanInstall -OnlyDrivers -AutoReboot:$Global:AutoReboot }
+      '2' { WU-ScanInstall -WithDrivers:$false -AutoReboot:$Global:AutoReboot }
       '3' { Update-Apps }
-      '4' { Update-Apps; WU-ScanInstall -WithDrivers:$true -AutoReboot:$false; Write-Host "`n=== Aggiornamenti COMPLETI eseguiti (App + OS + Driver) ===" -ForegroundColor Green }
+      '4' { Update-Apps; WU-ScanInstall -WithDrivers:$true -AutoReboot:$Global:AutoReboot; Write-Host "`n=== Aggiornamenti COMPLETI eseguiti (App + OS + Driver) ===" -ForegroundColor Green }
+      '5' { $Global:AutoReboot = -not $Global:AutoReboot; Write-Host ("Riavvio automatico ora: {0}" -f ($(if($Global:AutoReboot){"ON"}else{"OFF"}))) -ForegroundColor Yellow }
       'B' { break UPD }
       default { Write-Host "Scelta non valida." }
     }
@@ -412,32 +371,15 @@ function System-Loop(){
   }
 }
 
-# === Esegui TUTTO ===
+# === Esegui TUTTO (rispetta AutoReboot) ===
 function Run-All(){
   Write-Info "Esecuzione completa..."
   try{ Install-ChocoPackages -Pkgs $Global:PresetPackages }catch{ Write-Warn $_.Exception.Message }
   try{ System-SetChromeDefault }catch{ Write-Warn $_.Exception.Message }
   try{ System-DisableSleep }catch{ Write-Warn $_.Exception.Message }
-  try{
-    # Personalizzazione da config attiva (se presente)
-    if($Global:SelectedConfigPath -and (Test-Path $Global:SelectedConfigPath)){
-      $cfg = Get-Content -Raw $Global:SelectedConfigPath
-      $urls = @()
-      if($cfg -match '(?m)^\[HOMEPAGE\]'){
-        $m = [regex]::Match($cfg,'(?ms)^\[HOMEPAGE\](.+?)(^\[|$)')
-        if($m.Success){
-          $block=$m.Groups[1].Value
-          $u=[regex]::Match($block,'(?m)^\s*Urls\s*=\s*(.+)$')
-          $h=[regex]::Match($block,'(?m)^\s*Home\s*=\s*(.+)$')
-          if($u.Success){ $urls = ($u.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() }) }
-          $home = $(if($h.Success){ $h.Groups[1].Value.Trim() }else{ if($urls){ $urls[0] } })
-          if($urls){ Apply-Homepages ([pscustomobject]@{ HomeUrls=$urls; HomeSingle=$home }) }
-        }
-      }
-    }
-  }catch{ Write-Warn $_.Exception.Message }
+  try{ Apply-Homepages-FromConfig }catch{ Write-Warn $_.Exception.Message }
   try{ Update-Apps }catch{ Write-Warn $_.Exception.Message }
-  try{ WU-ScanInstall -WithDrivers:$true -AutoReboot:$false }catch{ Write-Warn $_.Exception.Message }
+  try{ WU-ScanInstall -WithDrivers:$true -AutoReboot:$Global:AutoReboot }catch{ Write-Warn $_.Exception.Message }
   Write-Host ""
   Write-Host "=== Operazioni completate ===" -ForegroundColor Green
 }
@@ -458,7 +400,6 @@ function Main-Menu(){
 }
 
 # === Avvio ===
-# Autoselezione profilo
 Load-LastConfig
 if(-not $Global:SelectedConfigPath){
   $list = List-ConfigFiles
@@ -482,7 +423,7 @@ if(-not $Global:SelectedConfigPath){
   switch($choice){
     '1' { Utenti-Loop }
     '2' { App-Loop }
-    '3' { Write-Host "Gestione profili personalizzazione via menu non interattivo. Usa Esegui TUTTO oppure config." }
+    '3' { Apply-Homepages-FromConfig }
     '4' { Updates-Loop }
     '6' { System-Loop }
     '5' { Run-All }
