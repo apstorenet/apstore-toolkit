@@ -1,0 +1,14 @@
+﻿[GENERAL]
+Name=base
+Description=Profilo essenziale per PC neutri
+
+[HOMEPAGE]
+Urls=https://www.google.com
+Home=https://www.google.com
+
+[PROGRAMS]
+Choco=7zip,googlechrome,vlc
+
+[SYSTEM]
+DisableSleep=true
+SetChromeDefault=false

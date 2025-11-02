@@ -1,0 +1,14 @@
+﻿[GENERAL]
+Name=apstore
+Description=Profilo aziendale con impostazioni personalizzate
+
+[HOMEPAGE]
+Urls=https://apstore.net,https://www.google.com
+Home=https://apstore.net
+
+[PROGRAMS]
+Choco=7zip,googlechrome,firefox,notepadplusplus,git,vscode,vlc
+
+[SYSTEM]
+DisableSleep=true
+SetChromeDefault=true
