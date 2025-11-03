@@ -24,12 +24,13 @@ if not exist "%PSFILE%" (
 )
 
 :: ===== Avvia PowerShell (passa argomenti del BAT) =====
+set "APSTORE_HOME=%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -NoExit -File "%PSFILE%" %*
 exit /b
 
 :#PS1
 param(
-  [switch]$Hold,
+  [switch]$Hold,     # lascia la finestra aperta alla fine
   [switch]$Auto,     # esegui tutto senza prompt, con AutoReboot
   [switch]$Silent,   # come Auto ma senza menu
   [switch]$Resume    # ripresa dopo riavvio
@@ -38,15 +39,25 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ====== Globali/base ======
-$Global:Version          = 'v1.9'
-$Global:ScriptDir        = Split-Path -Parent $PSCommandPath
-$Global:ProfilesDir      = Join-Path $Global:ScriptDir 'profiles'
-$Global:LogsDir          = 'C:\Windows\Logs\apStore_Toolkit'
-$Global:SelectedConfig   = $null
-$Global:AutoReboot       = $false
-$Global:SkipKB           = @()
-$Global:IncludeDrivers   = $false
-$Global:PresetPackages   = @('7zip','googlechrome','firefox','notepadplusplus','git','vscode','vlc')
+$Global:Version = 'v1.9'
+
+if ($env:APSTORE_HOME) {
+  # Usa sempre la cartella del .bat originale
+  $Global:ScriptDir = $env:APSTORE_HOME
+} else {
+  # Fallback: cartella dello script PS temporaneo
+  $Global:ScriptDir = Split-Path -Parent $PSCommandPath
+}
+
+Write-Host "[INFO] ScriptDir = $Global:ScriptDir"
+
+$Global:ProfilesDir    = Join-Path $Global:ScriptDir 'profiles'
+$Global:LogsDir        = 'C:\Windows\Logs\apStore_Toolkit'
+$Global:SelectedConfig = $null
+$Global:AutoReboot     = $false
+$Global:SkipKB         = @()
+$Global:IncludeDrivers = $false
+$Global:PresetPackages = @('7zip','googlechrome','firefox','notepadplusplus','git','vscode','vlc')
 
 New-Item -ItemType Directory -Force -Path $Global:ProfilesDir | Out-Null
 New-Item -ItemType Directory -Force -Path $Global:LogsDir    | Out-Null
@@ -66,20 +77,25 @@ function Start-Log(){
 }
 function Stop-Log(){ try{ Stop-Transcript | Out-Null }catch{} }
 
-# Ripresa post-riavvio
+# ====== Ripresa post-riavvio ======
 function Ensure-ResumeScript([string]$ArgsToPass){
-  $bat = Get-ChildItem -Path $Global:ScriptDir -Filter "apStore_Toolkit_*.bat" | Select-Object -First 1
+  $bat = Get-ChildItem -Path $Global:ScriptDir -Filter "apStore_Toolkit*.bat" | Select-Object -First 1
   if(-not $bat){ $bat = Get-ChildItem -Path $Global:ScriptDir -Filter "*.bat" | Select-Object -First 1 }
   if(-not $bat){ return $null }
+
   $resumeDir = Join-Path $Global:ScriptDir "resume"
   New-Item $resumeDir -ItemType Directory -Force | Out-Null
   $resumeCmd = Join-Path $resumeDir "resume.cmd"
-  "@echo off
-cd /d ""$($Global:ScriptDir)""
-""$($bat.FullName)"" $ArgsToPass
-"@ | Set-Content -Path $resumeCmd -Encoding ASCII
+
+  $content = @"
+@echo off
+cd /d "$($Global:ScriptDir)"
+"$($bat.FullName)" $ArgsToPass
+"@
+  $content | Set-Content -Path $resumeCmd -Encoding ASCII
   return $resumeCmd
 }
+
 function Register-RunOnce([string]$ArgsToPass){
   $cmd = Ensure-ResumeScript $ArgsToPass
   if(-not $cmd){ return }
@@ -91,11 +107,16 @@ function Register-RunOnce([string]$ArgsToPass){
 # ====== Config (INI minimale) ======
 function Detect-Config(){
   $candidates = @(
-    Join-Path $Global:ScriptDir 'config-apstore.txt',
-    Join-Path $Global:ScriptDir 'config-base.txt',
-    Join-Path $Global:ScriptDir 'config.txt'
+    "$($Global:ScriptDir)\config-apstore.txt"
+    "$($Global:ScriptDir)\config-base.txt"
+    "$($Global:ScriptDir)\config.txt"
   )
-  foreach($c in $candidates){ if(Test-Path $c){ $Global:SelectedConfig = $c; break } }
+  foreach($c in $candidates){
+    if(Test-Path $c){
+      $Global:SelectedConfig = $c
+      break
+    }
+  }
   if($null -eq $Global:SelectedConfig){
     Write-Warn "Nessun file config trovato nella cartella dello script."
   } else {
@@ -113,24 +134,24 @@ function Load-Config(){
   $raw = Get-Content -Raw -Path $Global:SelectedConfig
 
   # HOMEPAGE
-  $hp = Parse-Section $raw 'HOMEPAGE'
-  if($hp){
-    $urls = [regex]::Match($hp,'(?m)^\s*Urls\s*=\s*(.+)$')
-    $home = [regex]::Match($hp,'(?m)^\s*Home\s*=\s*(.+)$')
-    $Global:HomeUrls = @()
-    if($urls.Success){
-      $Global:HomeUrls = ($urls.Groups[1].Value -split ',' | % { $_.Trim() } | ? { $_ })
-    }
-    $Global:HomeSingle = $null
-    if($home.Success){ $Global:HomeSingle = $home.Groups[1].Value.Trim() }
+$hp = Parse-Section $raw 'HOMEPAGE'
+if($hp){
+  $urls = [regex]::Match($hp,'(?m)^\s*Urls\s*=\s*(.+)$')
+  $homeMatch = [regex]::Match($hp,'(?m)^\s*Home\s*=\s*(.+)$')
+  $Global:HomeUrls = @()
+  if($urls.Success){
+    $Global:HomeUrls = ($urls.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   }
+  $Global:HomeSingle = $null
+  if($homeMatch.Success){ $Global:HomeSingle = $homeMatch.Groups[1].Value.Trim() }
+}
 
   # PROGRAMS
   $pg = Parse-Section $raw 'PROGRAMS'
   if($pg){
     $ch = [regex]::Match($pg,'(?m)^\s*Choco\s*=\s*(.+)$')
     if($ch.Success){
-      $Global:PresetPackages = ($ch.Groups[1].Value -split ',' | % { $_.Trim() } | ? { $_ })
+      $Global:PresetPackages = ($ch.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     }
   }
 
@@ -153,7 +174,7 @@ function Load-Config(){
     $dr = [regex]::Match($up,'(?m)^\s*IncludeDrivers\s*=\s*(.+)$')
     if($ar.Success){ $Global:AutoReboot = @('true','1','yes','on').Contains($ar.Groups[1].Value.Trim().ToLower()) }
     if($sk.Success){
-      $Global:SkipKB = ($sk.Groups[1].Value -split ',' | % { $_.Trim() } | ? { $_ })
+      $Global:SkipKB = ($sk.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     }
     if($dr.Success){ $Global:IncludeDrivers = @('true','1','yes','on').Contains($dr.Groups[1].Value.Trim().ToLower()) }
   }
@@ -231,7 +252,7 @@ function Ensure-Choco(){
   try{
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $install = "Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol=[System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
+    $install = "Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol=[System.Net.ServicePointManager::SecurityProtocol] -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
     powershell -NoProfile -ExecutionPolicy Bypass -Command $install
     Start-Sleep -Seconds 3
     return (Get-Command choco.exe -ErrorAction SilentlyContinue) -ne $null
@@ -241,7 +262,10 @@ function Ensure-Choco(){
 function Install-ChocoPackages([string[]]$Pkgs){
   if(-not $Pkgs -or $Pkgs.Count -eq 0){ Write-Warn "Nessun pacchetto da installare."; return }
   $choco = Get-Command choco.exe -ErrorAction SilentlyContinue
-  if(-not $choco){ if(-not (Ensure-Choco)){ throw "Chocolatey non installato." } $choco = Get-Command choco.exe -ErrorAction Stop }
+  if(-not $choco){
+    if(-not (Ensure-Choco)){ throw "Chocolatey non installato." }
+    $choco = Get-Command choco.exe -ErrorAction Stop
+  }
   foreach($p in $Pkgs){
     Write-Info ("Installo: {0}" -f $p)
     $proc = Start-Process -FilePath $choco.Source -ArgumentList @('install', $p, '-y', '--no-progress','--ignore-checksums') -NoNewWindow -PassThru -Wait
@@ -284,16 +308,26 @@ function WU-ScanInstall(
     $queue = New-Object 'System.Collections.Generic.List[Object]'
     for($i=0;$i -lt $sr.Updates.Count;$i++){
       $u=$sr.Updates.Item($i)
-      $isDriver=$false; foreach($c in $u.Categories){ if($c.Name -match 'Driver|Drivers'){ $isDriver=$true; break } }
+      $isDriver=$false
+      foreach($c in $u.Categories){
+        if($c.Name -match 'Driver|Drivers'){ $isDriver=$true; break }
+      }
       # Skip KB
       if($SkipKB -and $SkipKB.Count -gt 0){
         $title=$u.Title; $hit=$false
-        foreach($k in $SkipKB){ $n=($k -replace '[^\d]',''); if($n -and $title -match ("KB{0}" -f $n)){ $hit=$true; break } }
+        foreach($k in $SkipKB){
+          $n=($k -replace '[^\d]','')
+          if($n -and $title -match ("KB{0}" -f $n)){ $hit=$true; break }
+        }
         if($hit){ continue }
       }
-      if($OnlyDrivers){ if($isDriver){ $queue.Add($u) } }
-      elseif($WithDrivers){ $queue.Add($u) }
-      elseif(-not $isDriver){ $queue.Add($u) }
+      if($OnlyDrivers){
+        if($isDriver){ $queue.Add($u) }
+      } elseif($WithDrivers){
+        $queue.Add($u)
+      } elseif(-not $isDriver){
+        $queue.Add($u)
+      }
     }
 
     $total = $queue.Count
@@ -336,8 +370,8 @@ function Menu-Main(){
   Write-Host "[2] Personalizzazione (Homepage da config)"
   Write-Host "[3] Sistema (Chrome default / disabilita sospensione)"
   Write-Host "[4] Aggiornamenti (Driver / OS / App / Tutto)"
-  Write-Host "[5] Esegui TUTTO (rispetta il config)"
   Write-Host "[8] Apri config attivo (Notepad)"
+  Write-Host "[5] Esegui TUTTO (rispetta il config)"
   Write-Host "[0] Esci"
   Write-Host "---------------------------------------------------------"
   return (Read-Host "Seleziona")
@@ -406,7 +440,7 @@ if($Resume){ Write-Info "Ripresa post-riavvio attiva." }
 if($Auto -or $Silent){
   Run-All
   Stop-Log
-  if($Hold -or $true){ Read-Host "Operazioni concluse. INVIO per chiudere" }
+  if($Hold){ Read-Host "Operazioni concluse. INVIO per chiudere" }
   exit
 }
 
@@ -415,8 +449,10 @@ if($Auto -or $Silent){
   switch($c){
     '1' { Install-ChocoPackages -Pkgs $Global:PresetPackages }
     '2' { Apply-Homepages-FromConfig }
-    '3' { if($Global:SetChromeDefault){ System-SetChromeDefault } else { Write-Warn "SetChromeDefault=false (config)." }
-          if($Global:DisableSleep){ System-DisableSleep } else { Write-Warn "DisableSleep=false (config)." } }
+    '3' {
+           if($Global:SetChromeDefault){ System-SetChromeDefault } else { Write-Warn "SetChromeDefault=false (config)." }
+           if($Global:DisableSleep){ System-DisableSleep } else { Write-Warn "DisableSleep=false (config)." }
+         }
     '4' { Updates-Loop }
     '5' { Run-All }
     '8' { if($Global:SelectedConfig){ Start-Process notepad.exe $Global:SelectedConfig } else { Write-Warn "Nessun config attivo." } }
@@ -426,4 +462,4 @@ if($Auto -or $Silent){
 }
 
 Stop-Log
-if($Hold -or $true){ Read-Host "Operazioni concluse. INVIO per chiudere" }
+if($Hold){ Read-Host "Operazioni concluse. INVIO per chiudere" }
