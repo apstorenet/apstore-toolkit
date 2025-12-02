@@ -1,19 +1,24 @@
+@"
 [GENERAL]
 Name=apstore
-Description=Profilo aziendale con impostazioni personalizzate
+Description=Profilo aziendale con RustDesk
 
 [HOMEPAGE]
 Urls=https://apstore.net,https://www.google.com
 Home=https://apstore.net
 
+[WALLPAPER]
+Path=C:\apstore\Wallpaper\apstore-bg.jpg
+Style=fill
+
 [PROGRAMS]
-Choco=7zip,googlechrome,firefox,notepadplusplus,git,vscode,vlc
+Choco=7zip,googlechrome,firefox,notepadplusplus,git,vscode,vlc,rustdesk
 
 [SYSTEM]
 DisableSleep=true
 SetChromeDefault=true
 
 [UPDATES]
-AutoReboot=true
-SkipKB=KB5034441,KB5030211
-IncludeDrivers=true
+AutoReboot=false
+IncludeDrivers=false
+"@ | Set-Content "C:\apstore-git\apstore-toolkit\apStore_Toolkit_v1.9.2\config-apstore.txt" -Encoding UTF8

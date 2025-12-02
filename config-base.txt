@@ -1,13 +1,18 @@
+@"
 [GENERAL]
 Name=base
-Description=Profilo essenziale per PC neutri
+Description=Profilo neutro con RustDesk
 
 [HOMEPAGE]
 Urls=https://www.google.com
 Home=https://www.google.com
 
+[WALLPAPER]
+Path=C:\apstore\Wallpaper\default.jpg
+Style=fit
+
 [PROGRAMS]
-Choco=7zip,googlechrome,vlc
+Choco=7zip,googlechrome,vlc,rustdesk
 
 [SYSTEM]
 DisableSleep=true
@@ -15,5 +20,5 @@ SetChromeDefault=false
 
 [UPDATES]
 AutoReboot=false
-SkipKB=
 IncludeDrivers=false
+"@ | Set-Content "C:\apstore-git\apstore-toolkit\apStore_Toolkit_v1.9.2\config-base.txt" -Encoding UTF8
